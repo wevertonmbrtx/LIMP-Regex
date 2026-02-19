@@ -14,11 +14,11 @@ set "SCRIPT_PATH=%~f0"
 set "PS_PAYLOAD=%TEMP%\XnoPayload_%RANDOM%_%TIME:~6,2%.ps1"
 
 echo.
-echo  ======================================================
-echo   [X OPTIMIZER] Inicializando ambiente
-echo  ======================================================
+echo =======================================================
+echo          [X OPTIMIZER] Inicializando ambiente
+echo =======================================================
 echo.
-echo  [*] Extraindo nucleo de processamento.
+echo  [i] Extraindo núcleo de processamento...
 echo.
 
 powershell -NoProfile -Command ^
@@ -33,15 +33,15 @@ powershell -NoProfile -Command ^
 
 :: Verificação de Integridade
 if %ERRORLEVEL% NEQ 0 (
-    echo  [ERRO CRITICO] Falha ao extrair o script PowerShell.
-    echo  Verifique permissões de escrita em: %TEMP%
+    echo  [X] Falha ao extrair o script PowerShell.
+    echo Verifique permissões de escrita em: %TEMP%
     echo.
     pause
     exit /b 1
 )
 
 if not exist "%PS_PAYLOAD%" (
-    echo  [ERRO CRITICO] Arquivo de payload não encontrado.
+    echo  [X] Arquivo de payload não encontrado.
     echo.
     pause
     exit /b 1
@@ -50,22 +50,12 @@ if not exist "%PS_PAYLOAD%" (
 :: Oculta o payload
 attrib +s +h +r "%PS_PAYLOAD%"
 
-echo  [*] Executando modulos de limpeza
+echo  [i] Executando módulos de limpeza
 echo.
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%PS_PAYLOAD%"
 set "EXIT_CODE=%ERRORLEVEL%"
-timeout /t 3 /nobreak >nul
-
-:: Aguarda término 
-:waitForPowerShell
-tasklist /FI "IMAGENAME eq powershell.exe" 2>nul | find /I /N "powershell.exe" >nul
-if "%ERRORLEVEL%"=="0" (
-    timeout /t 1 /nobreak >nul
-    goto waitForPowerShell
-)
-
-timeout /t 2 /nobreak >nul
+timeout /t 1 /nobreak >nul
 
 :: Remoção
 setlocal enabledelayedexpansion
@@ -85,27 +75,100 @@ if exist "%PS_PAYLOAD%" (
             goto deleteRetry
         ) else (
             echo.
-            echo O arquivo foi deletado com sucesso.
+            echo  [i] O arquivo foi deletado com sucesso.
         )
     ) else (
         echo.
-        echo O arquivo não pode ser deletado.
+        echo  [X] O arquivo não pode ser deletado.
     )
 )
 
 echo.
-echo PROCESSO BATCH FINALIZADO
+echo  [i] Processo batch finalizado.
 echo.
-timeout /t 3 /nobreak >nul
+timeout /t 1 /nobreak >nul
 cls
 exit /b %EXIT_CODE%
 
-:: ===========================================================================
-::  PAYLOAD POWERSHELL INICIA ABAIXO
-:: ===========================================================================
+:: ================================
+::  PAYLOAD POWERSHELL
+:: ================================
 :__POWERSHELL_START__
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = "SilentlyContinue"
+$ProgressPreference = "SilentlyContinue"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+
+function Set-ConsoleWindow {
+    param(
+        [Parameter(Mandatory=$false)]
+        [ValidateSet('Minimize', 'Restore')]
+        [string]$State,
+
+        [Parameter(Mandatory=$false)]
+        [switch]$Resize,
+
+        [int]$Width = 55,
+        [int]$Height = 44
+    )
+
+    # 1. Lógica de Redimensionamento
+    if ($Resize -and $Host.Name -eq 'ConsoleHost') {
+        try {
+            $rawUI = $Host.UI.RawUI
+            $maxPhys = $rawUI.MaxPhysicalWindowSize
+            
+            $w = [Math]::Min($Width, $maxPhys.Width)
+            $h = [Math]::Min($Height, $maxPhys.Height)
+            
+            $targetSize = $rawUI.WindowSize
+            $targetSize.Width = $w
+            $targetSize.Height = $h
+            
+            # Garante que o Buffer seja grande o suficiente
+            $buf = $rawUI.BufferSize
+            if ($buf.Width -lt $w) { $buf.Width = $w }
+            if ($buf.Height -lt $h) { $buf.Height = $h }
+            $rawUI.BufferSize = $buf
+            
+            $rawUI.WindowSize = $targetSize
+            $rawUI.BufferSize = $targetSize
+        } catch {
+            # Ignorar erros de redimensionamento
+        }
+    }
+
+    # 2. Lógica de Estado da Janela (Minimizar/Restaurar)
+    if ($PSBoundParameters.ContainsKey('State')) {
+        try {
+            # Verifica se o tipo já existe para evitar erros em chamadas subsequentes
+            if (-not ('WinAPI' -as [type])) {
+                $code = @"
+using System;
+using System.Runtime.InteropServices;
+public class WinAPI {
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetConsoleWindow();
+    public static void SetState(string state) {
+        IntPtr hWnd = GetConsoleWindow();
+        if (hWnd != IntPtr.Zero) {
+            // 6 = SW_MINIMIZE, 9 = SW_RESTORE
+            int cmd = (state == "Minimize") ? 6 : 9;
+            ShowWindow(hWnd, cmd);
+        }
+    }
+}
+"@
+                Add-Type -TypeDefinition $code -Language CSharp -ErrorAction SilentlyContinue
+            }
+            [WinAPI]::SetState($State)
+        } catch {
+            # Ignore
+        }
+    }
+}
 
 function Get-SystemContext {
     $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
@@ -190,6 +253,70 @@ function Format-Size {
     }
 }
 
+function Close-Apps {
+    Write-Log "Encerrando navegadores e aplicativos abertos..." "i"
+    $targetApps = @("chrome", "msedge", "msedgewebview", "msedgewebview2", "opera", "brave", "firefox", "discord", "teams", "ms-teams", "code", "blitz")
+    $anyClosed = $false
+    
+    foreach ($procName in $targetApps) {
+        $processes = Get-Process -Name $procName -ErrorAction SilentlyContinue
+        if ($processes) {
+            $processes | Stop-Process -Force -ErrorAction SilentlyContinue
+            $anyClosed = $true
+            Write-Log "Encerrando processos: $procName" "w"
+        }
+    }
+    
+    if ($anyClosed) { 
+        Write-Log "Aplicativos encerrados para liberação de arquivos." "o"
+    }
+}
+
+function Invoke-DnsCleanup {
+    [CmdletBinding()]
+    param()
+
+    Write-Log "Limpeza de cache DNS iniciada." "i"
+
+    try {
+        if (Get-Command "Clear-DnsClientCache" -ErrorAction SilentlyContinue) {
+            Clear-DnsClientCache -ErrorAction Stop
+        }
+        else {
+            $process = Start-Process ipconfig -ArgumentList "/flushdns" -NoNewWindow -Wait -PassThru
+            if ($process.ExitCode -ne 0) { throw "ipconfig retornou erro $($process.ExitCode)" }
+        }
+
+        Write-Log "Cache DNS limpo com sucesso." "o"
+        return $true
+    }
+    catch {
+        Write-Log "Falha ao limpar DNS: $_" "e"
+        return $false
+    }
+}
+
+function Invoke-StoreCacheReset {
+    Write-Log "Resetando cache da Microsoft Store" "i"
+    try {
+        # Executa wsreset em Job separado para evitar travamento do script principal
+        $job = Start-Job { Start-Process "wsreset.exe" -WindowStyle Hidden -Wait }
+        
+        # Timeout de segurança (15 segundos)
+        if (-not (Wait-Job $job -Timeout 15)) {
+            Stop-Job $job
+            Stop-Process -Name "wsreset" -Force -ErrorAction SilentlyContinue
+            Write-Log "Cache da Microsoft Store resetado (Forçado após timeout)." "o"
+        } else {
+            Remove-Job $job -Force
+            Stop-Process -Name "WinStore.App" -Force -ErrorAction SilentlyContinue
+            Write-Log "Cache da Microsoft Store resetado." "o"
+        }
+    } catch {
+        Write-Log "Falha ao resetar MS Store: $_" "e"
+    }
+}
+
 function Request-AdminPrivileges {
     param(
         [string]$ElevatedCopyMarker = "$env:TEMP\XnoPayload_Elevated_$RANDOM.ps1"
@@ -247,23 +374,17 @@ function Request-AdminPrivileges {
         }
 
         Write-Log "Elevação solicitada. PID: $($process.Id)" "o"
+        Write-Log "Aguardando finalização do processo elevado..." "i"
         
-        # Agenda auto-deleção da cópia elevada (após 3 segundos)
-        Start-Sleep -Seconds 1
-        $cleanupScript = {
-            param($path)
-            Start-Sleep -Seconds 3
-            try {
-                Remove-Item -LiteralPath $path -Force -ErrorAction Stop
-            } catch { }
-        }
-        Start-Job -ScriptBlock $cleanupScript -ArgumentList $ElevatedCopyMarker | Out-Null
+        $process.WaitForExit()
+        
+        Remove-Item -LiteralPath $ElevatedCopyMarker -Force -ErrorAction SilentlyContinue
         
         # Encerra instância atual (não elevada)
-        exit 0
+        exit $process.ExitCode
         
     } catch {
-        Write-Log "Falha na elevação: $_" "e"
+        Write-Log "Falha na elevação" "e"
         
         # Limpeza em caso de falha
         Remove-Item -LiteralPath $ElevatedCopyMarker -Force -ErrorAction SilentlyContinue
@@ -327,8 +448,10 @@ function Invoke-SystemCleanup {
         "WebCache", "ActionCenterCache", "AppCache",
         "WER\ReportQueue", "WER\ReportArchive", "WER\Temp"
     )
-    foreach ($p in $winSubPaths) {
-        $targets += New-Target -Path "$win\$p" -Name "Windows $p"
+    if ((Get-SystemContext).IsAdmin) {
+        foreach ($p in $winSubPaths) {
+            $targets += New-Target -Path "$win\$p" -Name "Windows $p"
+        }
     }
 
     # Caches Microsoft Local
@@ -340,17 +463,19 @@ function Invoke-SystemCleanup {
         $targets += New-Target -Path "$local\Microsoft\$p" -Name "Microsoft $p"
     }
 
-    # Jogos (Riot)
-    $riotTitles = @("Riot Client", "League of Legends", "VALORANT")
-    foreach ($title in $riotTitles) {
-        $targets += New-Target -Path "$local\Riot Games\$title" -Name "$title Temp"
-    }
+    ## Jogos (Riot)
+    #$riotTitles = @("Riot Client", "League of Legends", "VALORANT")
+    #foreach ($title in $riotTitles) {
+    #    $targets += New-Target -Path "$local\Riot Games\$title" -Name "$title Temp"
+    #}
 
     # Pastas Temporárias Globais e Diversos
     $targets += New-Target -Path "$temp" -Name "User Temp"
     $targets += New-Target -Path "$localLow\Temp" -Name "LocalLow Temp"
     $targets += New-Target -Path "$local\SquirrelTemp" -Name "Squirrel Temp"
-    $targets += New-Target -Path "$env:SystemRoot\Prefetch" -Name "Windows Prefetch"
+    if ((Get-SystemContext).IsAdmin) {
+        $targets += New-Target -Path "$env:SystemRoot\Prefetch" -Name "Windows Prefetch"
+    }
     $targets += New-Target -Path "$local\Microsoft\Outlook\RoamCache" -Name "Outlook RoamCache"
     $targets += New-Target -Path "$local\Microsoft\Teams\cache" -Name "Teams Local Cache"
 
@@ -548,8 +673,7 @@ function Invoke-RamMapCleanup {
     $executionStart = Get-Date
 
     # Verificação de Admin
-    $currentPrincipal = [System.Security.Principal.WindowsPrincipal][System.Security.Principal.WindowsIdentity]::GetCurrent()
-    if (-not $currentPrincipal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    if (-not (Get-SystemContext).IsAdmin) {
         $result.Message = "Requer privilégios elevados."
         Write-Log "Limpeza RAMMap ignorada (Requer Admin)." "w"
         return $result
@@ -628,7 +752,6 @@ function Invoke-RamMapCleanup {
         $result.Message       = "Erro no processo RAMMap: $_"
         Write-Log $result.Message "e"
     } finally {
-        # 5. Auto-Limpeza (Obrigatória)
         # Remove o executável da pasta Temp, independente de sucesso ou falha
         if (Test-Path $tempPath) {
             try {
@@ -660,8 +783,7 @@ function Invoke-RamCleanup {
     $executionStart = Get-Date
 
     # Verificação de Admin
-    $currentPrincipal = [System.Security.Principal.WindowsPrincipal][System.Security.Principal.WindowsIdentity]::GetCurrent()
-    if (-not $currentPrincipal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    if (-not (Get-SystemContext).IsAdmin) {
         $result.Message = "Requer privilégios elevados."
         Write-Log "Limpeza de RAM ignorada (Requer Admin)." "w"
         return $result
@@ -669,9 +791,7 @@ function Invoke-RamCleanup {
 
     Write-Log "Iniciando protocolo de otimização agressiva de memória" "i"
 
-    # -------------------------------------------------------------------------
     # Compilação Dinâmica de Ferramentas Nativas (C#)
-    # -------------------------------------------------------------------------
     if (-not ([System.Management.Automation.PSTypeName]'NativeRamTools').Type) {
         try {
             Add-Type -TypeDefinition @"
@@ -738,7 +858,7 @@ public class NativeRamTools {
         return new int[] { trimmed, skipped };
     }
 
-    // Fase 2: Resetar Working Sets via Kernel
+    // Fase 2: Resetar Resetar processos via Kernel
     public static uint EmptyWorkingSetsKernel() {
         if (!SetPrivilege("SeProfileSingleProcessPrivilege")) return uint.MaxValue;
         int cmd = 2; // MemoryEmptyWorkingSets
@@ -795,24 +915,24 @@ public class NativeRamTools {
         [System.GC]::Collect()
         $ramBefore = (Get-CimInstance -ClassName Win32_OperatingSystem).FreePhysicalMemory * 1024
 
-        # FASE 1: Working Set por processo
+        # Fase 1: Resetar processos (Trim Working Set)
         Write-Log "Comprimindo Working Sets (Processos)" "i"
         $counts = [NativeRamTools]::EmptyAllWorkingSets()
         Write-Log "Processos Otimizados: $($counts[0]) | Protegidos: $($counts[1])" "i"
 
-        # FASE 2: Working Sets via Kernel
+        # Fase 2: Resetar Resetar processos via Kernel
         $r = [NativeRamTools]::EmptyWorkingSetsKernel()
         if ($r -ne 0 -and $r -ne [uint32]::MaxValue) { 
             Write-Log "Aviso no Kernel Working Sets: 0x$($r.ToString('X'))" "w" 
         }
 
-        # FASE 3: File System Cache
+        # Fase 3: Limpar File System Cache
         $r = [NativeRamTools]::ClearFileSystemCache()
         if ($r -eq 0) { 
             Write-Log "File System Cache invalidado." "i" 
         }
 
-        # FASE 4: Standby List
+        # Fase 4: Purgar Standby List
         $r = [NativeRamTools]::PurgeStandbyList()
         if ($r -eq 0) { 
             Write-Log "Standby List purgada." "i" 
@@ -837,13 +957,54 @@ public class NativeRamTools {
 
     } catch {
         $result.ErrorOccurred = $true
-        $result.Message       = "Erro durante execução: $_"
+        $result.Message = "Erro durante execução: $_"
         Write-Log $result.Message "e"
     } finally {
         $result.DurationSeconds = ((Get-Date) - $executionStart).TotalSeconds
     }
 
     return $result
+}
+
+function Wait-ProcessWithWindowRefresh {
+    param(
+        [Parameter(Mandatory=$true)]
+        $Process,
+        [Parameter(Mandatory=$false)]
+        [string]$ProcessName = "Process",
+        [Parameter(Mandatory=$false)]
+        [int]$TimeoutSeconds = 300
+    )
+
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    
+    # Adiciona capacidade de manipular janelas se não existir
+    if (-not ("Win32.WindowHelper" -as [type])) {
+        $code = '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+        Add-Type -MemberDefinition $code -Name WindowHelper -Namespace Win32 -ErrorAction SilentlyContinue
+    }
+    
+    while (-not $Process.HasExited) {
+        if ($stopwatch.Elapsed.TotalSeconds -gt $TimeoutSeconds) {
+            Write-Log "Timeout aguardando $ProcessName após $TimeoutSeconds segundos" "w"
+            try { $Process.Kill() } catch {}
+            break
+        }
+        
+        # Tenta trazer a janela para frente periodicamente para evitar congelamento
+        if ($stopwatch.ElapsedMilliseconds % 2000 -lt 100) {
+            try {
+                $hwnd = $Process.MainWindowHandle
+                if ($hwnd -and $hwnd -ne [IntPtr]::Zero) {
+                    [Win32.WindowHelper]::SetForegroundWindow($hwnd) | Out-Null
+                }
+            } catch {}
+        }
+        
+        Start-Sleep -Milliseconds 100
+    }
+    
+    $stopwatch.Stop()
 }
 
 function Invoke-DiskCleanupDialog {
@@ -861,14 +1022,10 @@ function Invoke-DiskCleanupDialog {
 
     $executionStart = Get-Date
 
-    # Verificação de Admin interna
-    $currentPrincipal = [System.Security.Principal.WindowsPrincipal][System.Security.Principal.WindowsIdentity]::GetCurrent()
-    $isAdmin = $currentPrincipal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
-
     # Identifica a letra do drive do sistema (Geralmente C)
     $systemDrive = $env:SystemDrive.Substring(0,1)
 
-    if ($isAdmin) {
+    if ((Get-SystemContext).IsAdmin) {
         Write-Log "Iniciando Limpeza de Disco Nativa (Modo Automático)" "i"
         
         try {
@@ -877,7 +1034,6 @@ function Invoke-DiskCleanupDialog {
             $bytesBefore = $driveInfoBefore.Free
 
             # Configuração do Registro (SageRun:64)
-            # Isso marca todas as caixas de seleção automaticamente no registro
             $cleanupItems = @(
                 "Active Setup Temp Folders", "BranchCache", "Content Indexer Cleaner", 
                 "D3D Shader Cache", "Delivery Optimization Files", "Device Driver Packages",
@@ -904,7 +1060,7 @@ function Invoke-DiskCleanupDialog {
             # Execução Silenciosa
             Write-Log "Executando CleanMgr (Isso pode demorar)" "i"
             $process = Start-Process -FilePath "cleanmgr.exe" -ArgumentList "/sagerun:64" -PassThru -WindowStyle Hidden
-            $process | Wait-Process
+            Wait-ProcessWithWindowRefresh -Process $process -ProcessName "cleanmgr" -TimeoutSeconds 600
 
             # Medição Depois
             $driveInfoAfter = Get-PSDrive -Name $systemDrive
@@ -930,12 +1086,12 @@ function Invoke-DiskCleanupDialog {
 
     } else {
         # MODO INTERATIVO (SEM ADMIN)
-        Write-Log "Modo Administrador não detectado. Iniciando modo interativo" "w"
+        Write-Log "Modo Administrador não detectado" "w"
 
         # Carrega Assembly para MessageBox
         Add-Type -AssemblyName System.Windows.Forms
 
-        $msgBody = "O script não está rodando como Administrador.`n`neseja abrir a Limpeza de Disco do Windows manualmente?`n(Você terá que selecionar os itens e clicar em OK)."
+        $msgBody = "Rodando em modo usuário.`n`neseja abrir a Limpeza de Disco do Windows manualmente?`n(Você terá que selecionar os itens e clicar em OK)."
         $msgTitle = "Limpeza de Disco"
         $choice = [System.Windows.Forms.MessageBox]::Show($msgBody, $msgTitle, 'YesNo', 'Question')
 
@@ -949,7 +1105,7 @@ function Invoke-DiskCleanupDialog {
                 
                 # Abre a janela e espera fechar
                 $process = Start-Process "cleanmgr.exe" -ArgumentList "/d $systemDrive" -PassThru
-                $process | Wait-Process
+                Wait-ProcessWithWindowRefresh -Process $process -ProcessName "cleanmgr" -TimeoutSeconds 600
 
                 # Medição Depois
                 $driveInfoAfter = Get-PSDrive -Name $systemDrive
@@ -976,44 +1132,106 @@ function Invoke-DiskCleanupDialog {
     return $result
 }
 
-$ctx = Get-SystemContext
-
-if ($ctx.IsAdmin) {
-    Write-Log "Modo: ADMINISTRADOR (Otimização Completa)" "o"
-} elseif ($ctx.IsPersonal) {
-    # Computador Pessoal: Oferecer elevação
-    Write-Log "Computador Pessoal detectado." "i"
-    Write-Log "Modo: USUÁRIO LIMITADO. Tentando elevar privilégios" "w"
-    
-    Request-AdminPrivileges
-    
-    # Se chegou aqui, elevação falhou ou foi cancelada
-    Write-Log "Seguindo em modo restrito. Algumas limpezas (RAM/Sistema) serão ignoradas." "w"
-} else {
-    # Computador Corporativo: Não tentar elevar
-    Write-Log "Computador Corporativo detectado (Domínio). Elevação bloqueada." "w"
-    Write-Log "Modo: USUÁRIO LIMITADO. Continuando com permissões atuais." "i"
+function Invoke-ThumbnailCacheReset {
+    Write-Log "Recriando cache de miniaturas" "i"
+    try {
+        $thumbDbPath = "$env:LOCALAPPDATA\Microsoft\Windows\Explorer"
+        if (Test-Path -LiteralPath $thumbDbPath) {
+            # Explorer precisa ser reiniciado para liberar os arquivos .db
+            Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 1
+            
+            $thumbFreed = 0
+            Get-ChildItem -LiteralPath $thumbDbPath -Filter "*.db" -ErrorAction SilentlyContinue | ForEach-Object {
+                try {
+                    $size = $_.Length / 1MB
+                    Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop
+                    $thumbFreed += $size
+                } catch {}
+            }
+            
+            # Reinicia o Explorer se não voltou automaticamente
+            if (-not (Get-Process -Name explorer -ErrorAction SilentlyContinue)) {
+                Start-Process explorer.exe
+            }
+            Write-Log "Cache de ícones recriado" "o"
+            if ($thumbFreed -gt 0) {
+                $fmt = Format-Size -Bytes ($thumbFreed * 1MB)
+                Write-Log "Cache de miniaturas limpo. Liberado: $fmt" "o"
+            } else {
+                Write-Log "Cache de miniaturas limpo (Sem ganho significativo)." "o"
+            }
+        }
+    } catch {
+        # Garantia de retorno do shell em caso de erro
+        if (-not (Get-Process -Name explorer -ErrorAction SilentlyContinue)) { Start-Process explorer.exe }
+        Write-Log "Erro ao limpar miniaturas: $_" "e"
+    }
 }
 
+if ((Get-SystemContext).IsAdmin) {
+    Write-Log "Modo: ADMINISTRADOR (Otimização Completa)" "o"
+} elseif ((Get-SystemContext).IsPersonal) {
+    Write-Log "Computador Pessoal detectado (Sem Domínio). Tentando elevação..." "i"
+    $elevated = Request-AdminPrivileges
+    if ($elevated) {
+        exit
+    } else {
+        Write-Log "Elevação falhou ou foi negada. Continuando em modo limitado." "w"
+        Write-Log "Modo: USUÁRIO LIMITADO. Otimização parcial em execução." "i"
+    }
+} elseif ((Get-SystemContext).IsCorporate) {
+    Write-Log "Computador Corporativo detectado (Domínio). Elevação bloqueada." "w"
+    Write-Log "Modo: USUÁRIO LIMITADO. Otimização parcial em execução." "i"
+} else {
+    Write-Log "Contexto do sistema desconhecido. Continuando com permissões atuais." "w"
+    Write-Log "Modo: USUÁRIO LIMITADO. Otimização parcial em execução." "i"
+}
 
-$ramResult = Invoke-RamCleanup 
+Set-ConsoleWindow -Resize
+
+Close-Apps
+
+Invoke-ThumbnailCacheReset
+
+Invoke-StoreCacheReset
+
+$dnsCleanup = Invoke-DnsCleanup
 
 $sysResult = Invoke-SystemCleanup
 
 $browserResult = Invoke-BrowserCleanup
 
-$diskResult = Invoke-DiskCleanupDialog
+#$diskResult = Invoke-DiskCleanupDialog
 
-$totalBytes = $ramResult.TotalFreedBytes + $sysResult.TotalFreedBytes + $browserResult.TotalFreedBytes + $diskResult.TotalFreedBytes
-$fmtTotal = Format-Size -Bytes $totalBytes
+# Garante que a variável exista com valores zerados caso a limpeza de disco esteja desativada
+if (-not $diskResult) { $diskResult = [PSCustomObject]@{ TotalFreedBytes = 0; DurationSeconds = 0 } }
 
-Write-Host "`n========================================================" -ForegroundColor Cyan
-if ($ctx.IsAdmin) {
+try {
+    $ramResult = Invoke-RamCleanup
+} catch {
+    try {
+        $ramResult = Invoke-RamMapCleanup
+    } catch {
+        Write-Log "Erro ao executar limpeza de RAM: $_" "e"
+        $ramResult = [PSCustomObject]@{ TotalFreedBytes = 0; DurationSeconds = 0 }
+    }
+}
+
+$totalBytes = $sysResult.TotalFreedBytes + $browserResult.TotalFreedBytes + $diskResult.TotalFreedBytes
+$totalFreed = Format-Size -Bytes $totalBytes
+$totalRamFreed = Format-Size -Bytes $ramResult.TotalFreedBytes
+$totalTime = [math]::Round($sysResult.DurationSeconds + $browserResult.DurationSeconds + $diskResult.DurationSeconds + $ramResult.DurationSeconds, 2)
+
+Write-Host "`n=======================================================" -ForegroundColor Cyan
+if ((Get-SystemContext).IsAdmin) {
     Write-Log "OTIMIZAÇÃO COMPLETA FINALIZADA" "o"
+    Write-Log "RAM Otimizada: $totalRamFreed" "i"
 } else {
     Write-Log "OTIMIZAÇÃO PARCIAL FINALIZADA (Modo Usuário)" "w"
 }
-Write-Log "Espaço Total Recuperado: $fmtTotal" "i"
-Write-Host "========================================================" -ForegroundColor Cyan
+Write-Log "Tempo de execução: $totalTime segundos" "i"
+Write-Log "Espaço Total Recuperado: $totalFreed" "i"
+Write-Host "=======================================================" -ForegroundColor Cyan
 
-Start-Sleep -Seconds 4
+Start-Sleep -Seconds 3

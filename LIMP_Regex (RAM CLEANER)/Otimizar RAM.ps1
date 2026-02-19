@@ -1,5 +1,7 @@
-﻿[Console]::OutputEncoding = [System.Text.Encoding]::UTF8 
-$ErrorActionPreference = "SilentlyContinue"
+﻿$ErrorActionPreference = "SilentlyContinue"
+$ProgressPreference = "SilentlyContinue"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
 
 function Set-PowerShellWindowState {
     param(
