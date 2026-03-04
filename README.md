@@ -31,4 +31,4 @@ Este script realiza uma otimização agressiva da memória RAM no Windows, utili
    
 ## Aviso
 
-Este script manipula diretamente a memória do sistema. Embora seguro para uso geral, a limpeza agressiva de cache pode causar uma leve lentidão temporária logo após a execução, enquanto o sistema recarrega dados frequentemente usados. Use o script com cautela. Recomendo salvar e fechar os aplicativos abertos (navegadores, jogos, etc.) antes da execução. No caso do **OPTIMIZER X**, como ele limpa tudo, além da recomendação anterior, tambem oriento a verificar os itens na lixeira pois ele também apaga.
+Este script manipula diretamente a memória do sistema. Embora seguro para uso geral, a limpeza agressiva de cache pode causar uma leve lentidão temporária logo após a execução, enquanto o sistema recarrega dados frequentemente usados. Use o script com cautela. Recomendo salvar e fechar os aplicativos abertos (navegadores, jogos, etc.) antes da execução. No caso do **OPTIMIZER X**, como ele limpa tudo, além da recomendação anterior, também oriento a verificar os itens na lixeira pois ele também apaga.
